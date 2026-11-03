@@ -643,7 +643,7 @@
                     @if ($recentVehicle->primaryImage)
                         <img
                             class="recent-vehicle-image"
-                            src="{{ asset('storage/' . $recentVehicle->primaryImage->image_path) }}"
+                            src="{{ route('admin.vehicles.images.photo', ['vehicle' => $recentVehicle->id, 'image' => $recentVehicle->primaryImage->id]) }}"
                             alt=""
                             loading="lazy"
                         >

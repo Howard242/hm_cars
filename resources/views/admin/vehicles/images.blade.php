@@ -285,7 +285,7 @@
                 @foreach($vehicle->images as $image)
                     <div class="photo">
                         <img
-                            src="{{ asset('storage/' . $image->image_path) }}"
+                            src="{{ route('admin.vehicles.images.photo', ['vehicle' => $vehicle->id, 'image' => $image->id]) }}"
                             alt="Photo of {{ $vehicle->make }} {{ $vehicle->model }}"
                             loading="lazy"
                         >

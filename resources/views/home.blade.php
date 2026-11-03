@@ -29,8 +29,14 @@
                     @php($featured = $slide->featuredVehicle)
                     <a class="hero-featured-car" href="{{ route('vehicles.show', $featured) }}" aria-label="View featured {{ $featured->year }} {{ $featured->make }} {{ $featured->model }}">
                         @if($slide->offer_badge)<span class="hero-offer-badge">{{ $slide->offer_badge }}</span>@endif
-                        @if($featured->primaryImage)<img src="{{ asset('storage/'.$featured->primaryImage->image_path) }}" alt="{{ $featured->year }} {{ $featured->make }} {{ $featured->model }}">@else<div class="hero-featured-placeholder">{{ strtoupper(substr($featured->make,0,1).substr($featured->model,0,1)) }}</div>@endif
-                        <div class="hero-featured-copy"><small>FEATURED THIS WEEK</small><strong>{{ $featured->year }} {{ $featured->make }} {{ $featured->model }}</strong><span>KSh {{ number_format((float)$featured->price) }}</span><b>View this car →</b></div>
+                        @if($featured->primaryImage)
+                            <img
+                                src="{{ route('vehicles.images.show', ['vehicle' => $featured->slug, 'image' => $featured->primaryImage->id]) }}"
+                                alt="{{ $featured->year }} {{ $featured->make }} {{ $featured->model }}"
+                            >
+                        @else
+                            <div class="hero-featured-copy"><small>FEATURED THIS WEEK</small><strong>{{ $featured->year }} {{ $featured->make }} {{ $featured->model }}</strong><span>KSh {{ number_format((float)$featured->price) }}</span><b>View this car →</b></div>
+                        @endif
                     </a>
                 @elseif(!$slide->image_path)
                     <div class="hero-art" aria-label="HM CARS vehicle marketplace illustration">

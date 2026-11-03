@@ -6,7 +6,7 @@
 
         <div class="vehicle-image">
             <img
-                src="{{ asset('storage/' . $vehicle->primaryImage->image_path) }}"
+                src="{{ route('vehicles.images.show', ['vehicle' => $vehicle->slug, 'image' => $vehicle->primaryImage->id]) }}"
                 alt="{{ $vehicle->year }} {{ $vehicle->make }} {{ $vehicle->model }}"
                 loading="lazy"
             >

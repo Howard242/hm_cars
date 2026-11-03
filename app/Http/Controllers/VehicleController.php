@@ -9,6 +9,8 @@ use App\Models\HomeHeroSlide;
 use Illuminate\Http\Request;
 use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
+use App\Models\VehicleImage;
+use Illuminate\Support\Facades\Storage;
 
 class VehicleController extends Controller
 {
@@ -207,7 +209,53 @@ class VehicleController extends Controller
                 'Vehicle added successfully as pending.'
             );
     }
+    public function image(Vehicle $vehicle, VehicleImage $image)
+{
+    abort_unless($vehicle->status === 'published', 404);
+    abort_unless($image->vehicle_id === $vehicle->id, 404);
 
+    /** @var \Illuminate\Filesystem\FilesystemAdapter $disk */
+    $disk = Storage::disk('b2');
+    $path = $image->image_path;
+
+    abort_unless($disk->exists($path), 404);
+
+    $stream = $disk->readStream($path);
+
+    abort_if($stream === false, 404);
+
+    $contentType = $disk->mimeType($path) ?: '';
+
+    if (! in_array($contentType, [
+        'image/jpeg',
+        'image/png',
+        'image/webp',
+    ], true)) {
+        if (is_resource($stream)) {
+            fclose($stream);
+        }
+
+        abort(404);
+    }
+
+    return response()->stream(
+        function () use ($stream) {
+            try {
+                fpassthru($stream);
+            } finally {
+                if (is_resource($stream)) {
+                    fclose($stream);
+                }
+            }
+        },
+        200,
+        [
+            'Content-Type' => $contentType,
+            'Cache-Control' => 'public, max-age=86400',
+            'X-Content-Type-Options' => 'nosniff',
+        ]
+    );
+}
     /**
      * Display a published vehicle's details.
      */
@@ -219,6 +267,7 @@ class VehicleController extends Controller
         $campaignTracking = null;
         $platform = $request->query('utm_source');
         $campaign = $request->query('utm_campaign');
+        $matches = [];
         $promotionMatch = is_string($campaign)
             ? preg_match('/^vehicle-(\d+)-promotion-(\d+)$/', $campaign, $matches)
             : false;

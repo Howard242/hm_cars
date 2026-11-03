@@ -45,7 +45,7 @@
     <header>
         <div>
             <h1>Promote vehicle</h1>
-            <p>{{ $vehicle->year }} {{ $vehicle->make }} {{ $vehicle->model }} · KSh {{ number_format((float) $vehicle->price) }}</p>
+            <p>{{ $vehicle->year }} {{ $vehicle->make }} {{ $vehicle->model }} Â· KSh {{ number_format((float) $vehicle->price) }}</p>
         </div>
         <a class="button secondary" href="{{ route('admin.vehicles.index') }}">Back to vehicles</a>
     </header>
@@ -96,15 +96,19 @@
             <div class="photos">
                 @foreach ($vehicle->images as $image)
                     <article class="photo">
-                        <img src="{{ asset('storage/'.$image->image_path) }}" alt="Vehicle photo {{ $loop->iteration }}" loading="lazy">
-                        <p>Photo {{ $loop->iteration }}{{ $image->is_primary ? ' · Primary' : '' }}</p>
+                        <img
+    src="{{ route('admin.vehicles.images.photo', ['vehicle' => $vehicle->id, 'image' => $image->id]) }}"
+    alt="Vehicle photo {{ $loop->iteration }}"
+    loading="lazy"
+>
+                        <p>Photo {{ $loop->iteration }}{{ $image->is_primary ? ' Â· Primary' : '' }}</p>
                         <div class="actions">
                             <button type="button" class="button instagram download-photo"
-                                    data-image="{{ asset('storage/'.$image->image_path) }}"
+                                    data-image="{{ route('admin.vehicles.images.photo', ['vehicle' => $vehicle->id, 'image' => $image->id]) }}"
                                     data-format="instagram"
                                     data-index="{{ $loop->iteration }}">Download Instagram image</button>
                             <button type="button" class="button tiktok download-photo"
-                                    data-image="{{ asset('storage/'.$image->image_path) }}"
+                                    data-image="{{ route('admin.vehicles.images.photo', ['vehicle' => $vehicle->id, 'image' => $image->id]) }}"
                                     data-format="tiktok"
                                     data-index="{{ $loop->iteration }}">Download TikTok vertical slide</button>
                         </div>
@@ -150,10 +154,10 @@
 </main>
 <script>
     const status = document.getElementById('download-status');
-    const phone = @json($contactPhone);
-    const vehicleTitle = @json($vehicle->year.' '.$vehicle->make.' '.$vehicle->model);
-    const vehiclePrice = @json('KSh '.number_format((float) $vehicle->price));
-    const vehicleLocation = @json($vehicle->location);
+    const phone = "{{ addslashes($contactPhone) }}";
+    const vehicleTitle = "{{ addslashes($vehicle->year.' '.$vehicle->make.' '.$vehicle->model) }}";
+    const vehiclePrice = "{{ addslashes('KSh '.number_format((float) $vehicle->price)) }}";
+    const vehicleLocation = "{{ addslashes($vehicle->location) }}";
 
     document.querySelectorAll('.platform-form').forEach((form) => {
         form.addEventListener('submit', () => {
@@ -255,7 +259,7 @@
     document.querySelectorAll('.download-photo').forEach((button) => {
         button.addEventListener('click', async () => {
             button.disabled = true;
-            status.textContent = 'Preparing branded photo…';
+            status.textContent = 'Preparing branded photoâ€¦';
 
             try {
                 const image = await loadImage(button.dataset.image);

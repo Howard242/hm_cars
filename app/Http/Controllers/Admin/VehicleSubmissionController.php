@@ -48,15 +48,52 @@ class VehicleSubmissionController extends Controller
     }
 
     public function photo(
-        Request $request,
-        VehicleSubmission $submission,
-        VehicleSubmissionImage $image
-    ) {
-        $this->ensureAdmin($request);
-        abort_unless($image->vehicle_submission_id === $submission->id, 404);
+    Request $request,
+    VehicleSubmission $submission,
+    VehicleSubmissionImage $image
+) {
+    $this->ensureAdmin($request);
 
-        return response()->file(Storage::disk('local')->path($image->image_path));
-    }
+    abort_unless(
+        $image->vehicle_submission_id === $submission->id,
+        404
+    );
+
+    $disk = Storage::disk('b2');
+    $path = $image->image_path;
+
+    abort_unless($disk->exists($path), 404);
+
+    $stream = $disk->readStream($path);
+
+    abort_if($stream === false, 404);
+
+    /** @var \Illuminate\Filesystem\FilesystemAdapter $disk */
+    $contentType = $disk->mimeType($path) ?: '';
+
+    abort_unless(
+        in_array($contentType, ['image/jpeg', 'image/png', 'image/webp'], true),
+        404
+    );
+
+    return response()->stream(
+        function () use ($stream) {
+            try {
+                fpassthru($stream);
+            } finally {
+                if (is_resource($stream)) {
+                    fclose($stream);
+                }
+            }
+        },
+        200,
+        [
+            'Content-Type' => $contentType,
+            'Cache-Control' => 'private, no-store',
+            'X-Content-Type-Options' => 'nosniff',
+        ]
+    );
+}
 
     public function approve(Request $request, VehicleSubmission $submission)
     {
@@ -66,14 +103,14 @@ class VehicleSubmissionController extends Controller
             'admin_feedback' => ['nullable', 'string', 'max:5000'],
         ]);
 
-        $publicPaths = [];
+        $b2Paths = [];
 
         try {
             $vehicle = DB::transaction(function () use (
                 $request,
                 $submission,
                 $validated,
-                &$publicPaths
+                &$b2Paths
             ) {
                 $lockedSubmission = VehicleSubmission::with('images')
                     ->lockForUpdate()
@@ -84,6 +121,10 @@ class VehicleSubmissionController extends Controller
                 }
 
                 $this->ensureReviewable($lockedSubmission);
+
+                if ($lockedSubmission->images()->count() < 1) {
+                    abort(422, 'A vehicle must have at least one photo before it can be approved.');
+                }
 
                 $vehicle = Vehicle::create([
                     'make' => $lockedSubmission->make,
@@ -107,17 +148,17 @@ class VehicleSubmissionController extends Controller
                     $extension = in_array($extension, ['jpg', 'jpeg', 'png', 'webp'], true)
                         ? $extension
                         : 'jpg';
-                    $publicPath = 'vehicles/' . $vehicle->id . '/' . Str::uuid() . '.' . $extension;
-                    $publicPaths[] = $publicPath;
+                    $b2Path = 'vehicles/' . $vehicle->id . '/' . Str::uuid() . '.' . $extension;
+                    $b2Paths[] = $b2Path;
 
-                    $stream = Storage::disk('local')->readStream($image->image_path);
+                    $stream = Storage::disk('b2')->readStream($image->image_path);
 
                     if ($stream === false) {
                         throw new \RuntimeException('Unable to read a submitted vehicle photo.');
                     }
 
                     try {
-                        $stored = Storage::disk('public')->writeStream($publicPath, $stream);
+                        $stored = Storage::disk('b2')->writeStream($b2Path, $stream);
                     } finally {
                         if (is_resource($stream)) {
                             fclose($stream);
@@ -129,7 +170,7 @@ class VehicleSubmissionController extends Controller
                     }
 
                     $vehicle->images()->create([
-                        'image_path' => $publicPath,
+                        'image_path' => $b2Path,
                         'is_primary' => $index === 0,
                         'sort_order' => $index,
                     ]);
@@ -146,7 +187,12 @@ class VehicleSubmissionController extends Controller
                 return $vehicle;
             });
         } catch (\Throwable $exception) {
-            Storage::disk('public')->delete($publicPaths);
+            try {
+                Storage::disk('b2')->delete($b2Paths);
+            } catch (\Throwable $cleanupException) {
+                report($cleanupException);
+            }
+
             throw $exception;
         }
 

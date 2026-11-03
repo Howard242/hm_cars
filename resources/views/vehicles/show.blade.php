@@ -30,7 +30,7 @@
                     <div class="vehicle-gallery-main">
                         <img
                             id="mainVehicleImage"
-                            src="{{ asset('storage/' . $mainImage->image_path) }}"
+                            src="{{ route('vehicles.images.show', ['vehicle' => $vehicle->slug, 'image' => $mainImage->id]) }}"
                             alt="{{ $vehicle->year }} {{ $vehicle->make }} {{ $vehicle->model }}"
                         >
                     </div>
@@ -43,12 +43,12 @@
                             <button
                                 type="button"
                                 class="vehicle-gallery-thumbnail {{ $image->id === $mainImage->id ? 'active' : '' }}"
-                                data-image="{{ asset('storage/' . $image->image_path) }}"
+                                data-image="{{ route('vehicles.images.show', ['vehicle' => $vehicle->slug, 'image' => $image->id]) }}"
                                 aria-label="View vehicle photo {{ $loop->iteration }}"
                                 aria-pressed="{{ $image->id === $mainImage->id ? 'true' : 'false' }}"
                             >
                                 <img
-                                    src="{{ asset('storage/' . $image->image_path) }}"
+                                    src="{{ route('vehicles.images.show', ['vehicle' => $vehicle->slug, 'image' => $image->id]) }}"
                                     alt="{{ $vehicle->make }} {{ $vehicle->model }} photo {{ $loop->iteration }}"
                                     loading="lazy"
                                 >

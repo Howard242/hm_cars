@@ -27,6 +27,9 @@ Route::get('/vehicles', [VehicleController::class, 'index'])
 Route::get('/vehicles/{vehicle:slug}', [VehicleController::class, 'show'])
     ->name('vehicles.show');
 
+Route::get('/vehicles/{vehicle:slug}/images/{image}', [VehicleController::class, 'image'])
+    ->name('vehicles.images.show');
+
 Route::get('/how-to-own-a-car', [OwnershipGuideController::class, 'show'])
     ->name('ownership-guide.show');
 
@@ -201,6 +204,10 @@ Route::post(
     [VehicleImageController::class, 'store']
 )->name('vehicles.images.store');
 
+Route::get(
+    '/vehicles/{vehicle}/images/{image}/file',
+    [VehicleImageController::class, 'photo']
+)->name('vehicles.images.photo');
 
 Route::patch(
     '/vehicles/{vehicle}/images/{image}/primary',

@@ -3,6 +3,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\Vehicle;
+use App\Models\VehicleImage;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -33,35 +34,37 @@ class VehicleImageController extends Controller
             ],
         ]);
 
-        $currentCount = $vehicle->images()->count();
-        $newCount = count($validated['photos']);
-
-        if ($currentCount + $newCount > 10) {
-            throw ValidationException::withMessages([
-                'photos' => 'A vehicle can have a maximum of 10 photos.',
-            ]);
-        }
-
-        // The initial upload must contain at least five photos.
-        if ($currentCount === 0 && $newCount < 5) {
-            throw ValidationException::withMessages([
-                'photos' => 'Please upload at least 5 photos for a new vehicle gallery.',
-            ]);
-        }
-
         $storedPaths = [];
 
         try {
             DB::transaction(function () use (
                 $vehicle,
                 $validated,
-                $currentCount,
                 &$storedPaths
             ) {
+                $lockedVehicle = Vehicle::whereKey($vehicle->id)
+                    ->lockForUpdate()
+                    ->firstOrFail();
+
+                $currentCount = $lockedVehicle->images()->count();
+                $newCount = count($validated['photos']);
+
+                if ($currentCount + $newCount > 10) {
+                    throw ValidationException::withMessages([
+                        'photos' => 'A vehicle can have a maximum of 10 photos.',
+                    ]);
+                }
+
+                if ($currentCount === 0 && $newCount < 5) {
+                    throw ValidationException::withMessages([
+                        'photos' => 'Please upload at least 5 photos for a new vehicle gallery.',
+                    ]);
+                }
+
                 foreach ($validated['photos'] as $index => $photo) {
                     $path = $photo->store(
-                        'vehicles/' . $vehicle->id,
-                        'public'
+                        'vehicles/' . $lockedVehicle->id,
+                        'b2'
                     );
 
                     if ($path === false) {
@@ -72,7 +75,7 @@ class VehicleImageController extends Controller
 
                     $storedPaths[] = $path;
 
-                    $vehicle->images()->create([
+                    $lockedVehicle->images()->create([
                         'image_path' => $path,
                         'is_primary' => (
                             $currentCount === 0 && $index === 0
@@ -83,7 +86,11 @@ class VehicleImageController extends Controller
             });
         } catch (\Throwable $exception) {
             foreach ($storedPaths as $path) {
-                Storage::disk('public')->delete($path);
+                try {
+                    Storage::disk('b2')->delete($path);
+                } catch (\Throwable $cleanupException) {
+                    report($cleanupException);
+                }
             }
 
             throw $exception;
@@ -93,125 +100,239 @@ class VehicleImageController extends Controller
             ->route('admin.vehicles.images.index', $vehicle)
             ->with('success', 'Vehicle photos uploaded successfully.');
     }
-    
-public function setPrimary(
-    Request $request,
-    Vehicle $vehicle,
-    \App\Models\VehicleImage $image
-) {
-    abort_unless($request->user()?->is_admin, 403);
 
-    // Ensure this photo belongs to the selected vehicle.
-    abort_unless($image->vehicle_id === $vehicle->id, 404);
+    public function photo(
+        Request $request,
+        Vehicle $vehicle,
+        VehicleImage $image
+    ) {
+        abort_unless($request->user()?->is_admin, 403);
 
-    // Only one image can be the main photo.
-    DB::transaction(function () use ($vehicle, $image) {
+        abort_unless($image->vehicle_id === $vehicle->id, 404);
 
-        $vehicle->images()->update([
-            'is_primary' => false,
-        ]);
+        $disk = Storage::disk('b2');
+        $path = $image->image_path;
 
-        $image->update([
-            'is_primary' => true,
-        ]);
+        abort_unless($disk->exists($path), 404);
 
-    });
+        $stream = $disk->readStream($path);
 
-    return redirect()
-        ->route('admin.vehicles.images.index', $vehicle)
-        ->with('success', 'Main vehicle photo updated successfully.');
-}
+        abort_if($stream === false, 404);
 
-public function replace(
-    Request $request,
-    Vehicle $vehicle,
-    \App\Models\VehicleImage $image
-) {
-    abort_unless($request->user()?->is_admin, 403);
-    abort_unless($image->vehicle_id === $vehicle->id, 404);
+        try {
+            $contentType = $disk->mimeType($path) ?: '';
+        } catch (\Throwable $exception) {
+            if (is_resource($stream)) {
+                fclose($stream);
+            }
 
-    $validated = $request->validate([
-        'photo' => [
-            'required',
-            'image',
-            'mimes:jpg,jpeg,png,webp',
-            'max:5120',
-        ],
-    ]);
+            throw $exception;
+        }
 
-    $newPath = $validated['photo']->store(
-        'vehicles/' . $vehicle->id,
-        'public'
-    );
+        if (! in_array($contentType, [
+            'image/jpeg',
+            'image/png',
+            'image/webp',
+        ], true)) {
+            if (is_resource($stream)) {
+                fclose($stream);
+            }
 
-    if ($newPath === false) {
-        throw new \RuntimeException('Unable to save the replacement photo.');
+            abort(404);
+        }
+
+        return response()->stream(
+            function () use ($stream) {
+                try {
+                    fpassthru($stream);
+                } finally {
+                    if (is_resource($stream)) {
+                        fclose($stream);
+                    }
+                }
+            },
+            200,
+            [
+                'Content-Type' => $contentType,
+                'Cache-Control' => 'private, no-store',
+                'X-Content-Type-Options' => 'nosniff',
+            ]
+        );
     }
+    public function setPrimary(
+        Request $request,
+        Vehicle $vehicle,
+        VehicleImage $image
+    ) {
+        abort_unless($request->user()?->is_admin, 403);
 
-    $oldPath = $image->image_path;
+        abort_unless($image->vehicle_id === $vehicle->id, 404);
 
-    try {
-        DB::transaction(function () use ($image, $newPath) {
-            $image->update(['image_path' => $newPath]);
-        });
-    } catch (\Throwable $exception) {
-        Storage::disk('public')->delete($newPath);
-        throw $exception;
-    }
+        DB::transaction(function () use ($vehicle, $image) {
+            $lockedVehicle = Vehicle::whereKey($vehicle->id)
+                ->lockForUpdate()
+                ->firstOrFail();
 
-    Storage::disk('public')->delete($oldPath);
+            $lockedImage = $lockedVehicle->images()
+                ->whereKey($image->id)
+                ->lockForUpdate()
+                ->firstOrFail();
 
-    return redirect()
-        ->route('admin.vehicles.images.index', $vehicle)
-        ->with('success', 'Vehicle photo replaced successfully.');
-}
+            $lockedVehicle->images()->update([
+                'is_primary' => false,
+            ]);
 
-public function destroy(
-    Request $request,
-    Vehicle $vehicle,
-    \App\Models\VehicleImage $image
-) {
-    abort_unless($request->user()?->is_admin, 403);
+            $lockedImage->update([
+                'is_primary' => true,
+            ]);
+        }, 3);
 
-    // Confirm that the image belongs to this vehicle.
-    abort_unless($image->vehicle_id === $vehicle->id, 404);
-
-    // Keep at least five photos per vehicle.
-    if ($vehicle->images()->count() <= 5) {
         return redirect()
             ->route('admin.vehicles.images.index', $vehicle)
-            ->with(
-                'error',
-                'A vehicle must retain at least 5 photos. Upload another photo before deleting this one.'
-            );
+            ->with('success', 'Main vehicle photo updated successfully.');
     }
+    public function replace(
+        Request $request,
+        Vehicle $vehicle,
+        VehicleImage $image
+    ) {
+        abort_unless($request->user()?->is_admin, 403);
 
-    $imagePath = $image->image_path;
+        abort_unless($image->vehicle_id === $vehicle->id, 404);
 
-    DB::transaction(function () use ($vehicle, $image) {
+        $validated = $request->validate([
+            'photo' => [
+                'required',
+                'image',
+                'mimes:jpg,jpeg,png,webp',
+                'max:5120',
+            ],
+        ]);
 
-        $wasPrimary = $image->is_primary;
+        $newPath = $validated['photo']->store(
+            'vehicles/' . $vehicle->id,
+            'b2'
+        );
 
-        $image->delete();
+        if ($newPath === false) {
+            throw new \RuntimeException(
+                'Unable to save the replacement photo.'
+            );
+        }
 
-        // If the main photo was deleted, select another.
-        if ($wasPrimary) {
-            $nextImage = $vehicle->images()->first();
+        $oldPath = null;
 
-            if ($nextImage) {
-                $nextImage->update([
-                    'is_primary' => true,
+        try {
+            DB::transaction(function () use (
+                $vehicle,
+                $image,
+                $newPath,
+                &$oldPath
+            ) {
+                $lockedVehicle = Vehicle::whereKey($vehicle->id)
+                    ->lockForUpdate()
+                    ->firstOrFail();
+
+                $lockedImage = $lockedVehicle->images()
+                    ->whereKey($image->id)
+                    ->lockForUpdate()
+                    ->firstOrFail();
+
+                $oldPath = $lockedImage->image_path;
+
+                $lockedImage->update([
+                    'image_path' => $newPath,
                 ]);
+            });
+        } catch (\Throwable $exception) {
+            try {
+                Storage::disk('b2')->delete($newPath);
+            } catch (\Throwable $cleanupException) {
+                report($cleanupException);
+            }
+
+            throw $exception;
+        }
+
+        if ($oldPath !== null) {
+            try {
+                Storage::disk('b2')->delete($oldPath);
+            } catch (\Throwable $cleanupException) {
+                report($cleanupException);
             }
         }
-    });
 
-    // Delete the physical image after the database update.
-    Storage::disk('public')->delete($imagePath);
+        return redirect()
+            ->route('admin.vehicles.images.index', $vehicle)
+            ->with('success', 'Vehicle photo replaced successfully.');
+    }
 
-    return redirect()
-        ->route('admin.vehicles.images.index', $vehicle)
-        ->with('success', 'Vehicle photo deleted successfully.');
-}
+    public function destroy(
+        Request $request,
+        Vehicle $vehicle,
+        VehicleImage $image
+    ) {
+        abort_unless($request->user()?->is_admin, 403);
+
+        abort_unless($image->vehicle_id === $vehicle->id, 404);
+
+        $imagePath = null;
+        $deletionBlocked = false;
+
+        DB::transaction(function () use (
+            $vehicle,
+            $image,
+            &$imagePath,
+            &$deletionBlocked
+        ) {
+            $lockedVehicle = Vehicle::whereKey($vehicle->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            $lockedImage = $lockedVehicle->images()
+                ->whereKey($image->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            if ($lockedVehicle->images()->count() <= 5) {
+                $deletionBlocked = true;
+                return;
+            }
+
+            $imagePath = $lockedImage->image_path;
+            $wasPrimary = $lockedImage->is_primary;
+
+            $lockedImage->delete();
+
+            if ($wasPrimary) {
+                $nextImage = $lockedVehicle->images()->first();
+
+                if ($nextImage) {
+                    $nextImage->update([
+                        'is_primary' => true,
+                    ]);
+                }
+            }
+        }, 3);
+
+        if ($deletionBlocked) {
+            return redirect()
+                ->route('admin.vehicles.images.index', $vehicle)
+                ->with(
+                    'error',
+                    'A vehicle must retain at least 5 photos. Upload another photo before deleting this one.'
+                );
+        }
+
+        try {
+            Storage::disk('b2')->delete($imagePath);
+        } catch (\Throwable $cleanupException) {
+            report($cleanupException);
+        }
+
+        return redirect()
+            ->route('admin.vehicles.images.index', $vehicle)
+            ->with('success', 'Vehicle photo deleted successfully.');
+    }
 
 }

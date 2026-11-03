@@ -91,7 +91,7 @@ class VehicleSubmissionController extends Controller
                 foreach ($validated['photos'] as $index => $photo) {
                     $path = $photo->store(
                         'vehicle-submissions/'.$submission->id,
-                        'local'
+                        'b2'
                     );
 
                     if ($path === false) {
@@ -108,7 +108,7 @@ class VehicleSubmissionController extends Controller
                 return $submission;
             });
         } catch (QueryException $exception) {
-            Storage::disk('local')->delete($storedPaths);
+            Storage::disk('b2')->delete($storedPaths);
 
             if (VehicleSubmission::where('request_key_hash', $requestKeyHash)->exists()) {
                 abort(409, 'This form has already been submitted. Use your existing tracking link.');
@@ -116,7 +116,7 @@ class VehicleSubmissionController extends Controller
 
             throw $exception;
         } catch (\Throwable $exception) {
-            Storage::disk('local')->delete($storedPaths);
+            Storage::disk('b2')->delete($storedPaths);
             throw $exception;
         }
 
@@ -152,53 +152,69 @@ class VehicleSubmissionController extends Controller
             'photos.*' => ['required', 'image', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
         ]);
 
-        DB::transaction(function () use ($token, $validated, $request) {
-            $submission = VehicleSubmission::with('images')
-                ->where('tracking_token_hash', hash('sha256', $token))
-                ->lockForUpdate()
-                ->firstOrFail();
+        $storedPaths = [];
 
-            abort_unless(
-                $submission->status === VehicleSubmission::STATUS_MORE_INFORMATION_REQUIRED,
-                409
-            );
+        try {
+            DB::transaction(function () use ($token, $validated, $request, &$storedPaths) {
+                $submission = VehicleSubmission::with('images')
+                    ->where('tracking_token_hash', hash('sha256', $token))
+                    ->lockForUpdate()
+                    ->firstOrFail();
 
-            $newPhotos = $request->file('photos', []);
-            if (count($submission->images) + count($newPhotos) > 10) {
-                throw ValidationException::withMessages([
-                    'photos' => 'This submission can contain no more than 10 photos in total.',
-                ]);
-            }
+                abort_unless(
+                    $submission->status === VehicleSubmission::STATUS_MORE_INFORMATION_REQUIRED,
+                    409
+                );
 
-            $submission->update([
-                'seller_name' => $validated['seller_name'],
-                'seller_phone' => $validated['seller_phone'],
-                'seller_email' => $validated['seller_email'],
-                'make' => $validated['make'],
-                'model' => $validated['model'],
-                'year' => $validated['year'],
-                'price' => $validated['price'],
-                'location' => $validated['location'],
-                'transmission' => $validated['transmission'],
-                'fuel_type' => $validated['fuel_type'],
-                'mileage_km' => $validated['mileage_km'],
-                'description' => $validated['description'],
-                'seller_response' => $validated['seller_response'],
-                'status' => VehicleSubmission::STATUS_PENDING_REVIEW,
-            ]);
+                $newPhotos = $request->file('photos', []);
 
-            $nextSortOrder = (int) $submission->images()->max('sort_order') + 1;
-            foreach ($newPhotos as $photo) {
-                $path = $photo->store('vehicle-submissions/'.$submission->id, 'local');
-                if ($path === false) {
-                    throw new \RuntimeException('Unable to save an uploaded photo.');
+                if (count($submission->images) + count($newPhotos) > 10) {
+                    throw ValidationException::withMessages([
+                        'photos' => 'This submission can contain no more than 10 photos in total.',
+                    ]);
                 }
-                $submission->images()->create([
-                    'image_path' => $path,
-                    'sort_order' => $nextSortOrder++,
+
+                $submission->update([
+                    'seller_name' => $validated['seller_name'],
+                    'seller_phone' => $validated['seller_phone'],
+                    'seller_email' => $validated['seller_email'],
+                    'make' => $validated['make'],
+                    'model' => $validated['model'],
+                    'year' => $validated['year'],
+                    'price' => $validated['price'],
+                    'location' => $validated['location'],
+                    'transmission' => $validated['transmission'],
+                    'fuel_type' => $validated['fuel_type'],
+                    'mileage_km' => $validated['mileage_km'],
+                    'description' => $validated['description'],
+                    'seller_response' => $validated['seller_response'],
+                    'status' => VehicleSubmission::STATUS_PENDING_REVIEW,
                 ]);
-            }
-        });
+
+                $nextSortOrder = (int) $submission->images()->max('sort_order') + 1;
+
+                foreach ($newPhotos as $photo) {
+                    $path = $photo->store(
+                        'vehicle-submissions/' . $submission->id,
+                        'b2'
+                    );
+
+                    if ($path === false) {
+                        throw new \RuntimeException('Unable to save an uploaded photo.');
+                    }
+
+                    $storedPaths[] = $path;
+
+                    $submission->images()->create([
+                        'image_path' => $path,
+                        'sort_order' => $nextSortOrder++,
+                    ]);
+                }
+            });
+        } catch (\Throwable $exception) {
+            Storage::disk('b2')->delete($storedPaths);
+            throw $exception;
+        }
 
         return redirect()
             ->route('sell.track', ['token' => $token])
